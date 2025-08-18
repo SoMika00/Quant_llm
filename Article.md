@@ -451,20 +451,20 @@ En suivant ces points de contrôle, vous aurez l’assurance que votre modèle q
 
 15) TL;DR
 
-H100 = FP8 natif 📈 : Les GPU NVIDIA Hopper (H100) supportent nativement le calcul en float8 via la Transformer Engine. Cela permet d’atteindre des performances jusqu’à ~4–5× supérieures à A100 FP16, avec une qualité de modèle pratiquement inchangée si calibré correctement
+H100 = FP8 natif  : Les GPU NVIDIA Hopper (H100) supportent nativement le calcul en float8 via la Transformer Engine. Cela permet d’atteindre des performances jusqu’à ~4–5× supérieures à A100 FP16, avec une qualité de modèle pratiquement inchangée si calibré correctement
 nvidia.github.io
 developers.redhat.com
 . En clair, FP8 sur H100 offre le meilleur ratio qualité/latence/VRAM aujourd’hui.
 
-TensorRT-LLM 🚀 : C’est la solution NVIDIA optimisée pour inférence LLM. Elle compile le modèle en un engine ultra-rapide. Avantages : support du FP8 et INT8 (SmoothQuant) directement, batching asynchrone en vol, KV-cache paginé, multi-GPU… Bref, c’est ce qui donnera les latences et throughputs minimum sur H100
+TensorRT-LLM  : C’est la solution NVIDIA optimisée pour inférence LLM. Elle compile le modèle en un engine ultra-rapide. Avantages : support du FP8 et INT8 (SmoothQuant) directement, batching asynchrone en vol, KV-cache paginé, multi-GPU… Bref, c’est ce qui donnera les latences et throughputs minimum sur H100
 developer.nvidia.com
 . Inconvénient : spécifique NVIDIA, et nécessite de passer par une étape de build.
 
-vLLM 🐍 : Serveur haute performance open-source. Il introduit PagedAttention qui réduit le gâchis mémoire du KV-cache à <4%, permettant de booster le throughput sans changer de hardware
+vLLM  : Serveur haute performance open-source. Il introduit PagedAttention qui réduit le gâchis mémoire du KV-cache à <4%, permettant de booster le throughput sans changer de hardware
 runpod.io
 . vLLM supporte aussi FP8 et INT8 (ainsi que chargement de modèles 4-bit). Idéal si on veut une intégration simple (quelques lignes Python) tout en gardant des perfs state-of-the-art. C’est open-source (Apache 2.0). Moins rapide que TRT-LLM sur un seul GPU, mais plus flexible.
 
-Choix de quantization 🤖 :
+Choix de quantization  :
 
 Pour la qualité max : FP8 (8-bit flottant) si possible, sinon INT8 SmoothQuant. Ces deux options donnent des résultats quasi identiques au FP16 original sur la plupart des modèles
 arxiv.org
@@ -474,11 +474,11 @@ Pour pousser la compression : INT4 (4-bit poids) via AWQ/GPTQ est faisable sur 
 
 Le tout sans réentraîner (PTQ). On peut quantizer un modèle après-coup et le servir directement.
 
-Formats GGUF (llama.cpp) 💾 : Utiles pour exécuter des LLM sur CPU ou petits GPU. Exemples : Q8_0 (8-bit poids), Q4_K_M (4-bit groupe Medium)
+Formats GGUF (llama.cpp)  : Utiles pour exécuter des LLM sur CPU ou petits GPU. Exemples : Q8_0 (8-bit poids), Q4_K_M (4-bit groupe Medium)
 medium.com
 . Ils rendent les modèles plus accessibles, au prix d’une vitesse moindre. Sur H100, ces formats ne tirent pas profit du hardware spécialisé, donc on privilégiera plutôt TRT-LLM/vLLM. Mais pour du offline ou du local sans CUDA, c’est génial.
 
-Licences & modèles merges 📜 : Attention à la légalité ! Un modèle comme Luminum-123B mergeant Mistral (licence MRL, non-commercial) et Lumimaid (CC-BY-NC-4.0) reste Non-Commercial et soumis aux restrictions de diffusion des originaux
+Licences & modèles merges  : Attention à la légalité ! Un modèle comme Luminum-123B mergeant Mistral (licence MRL, non-commercial) et Lumimaid (CC-BY-NC-4.0) reste Non-Commercial et soumis aux restrictions de diffusion des originaux
 huggingface.co
 huggingface.co
 . Quantizer un modèle ne change pas sa licence. Il est généralement interdit de redistribuer des poids dérivés sans accord si la licence source l’interdit (ex : Mistral MRL prohibe de partager le modèle fine-tuné sans passer par eux
