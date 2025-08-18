@@ -343,3 +343,171 @@ Comment
 You're not receiving notifications from this thread.
 
 Update Article.md · SoMika00/Quant_llm@c4335f0 There are no files selected for viewing
+
+
+
+
+
+debut de la reecriture : Guide pratique (2025) — Quantization LLM sur H100 et alternatives (TRT-LLM, vLLM, GGUF)
+Introduction : Les bases de la mémoire d'un LLM
+Pour bien comprendre la quantization, il est essentiel de maîtriser quatre concepts clés qui déterminent l'empreinte mémoire d'un grand modèle de langage (LLM) lors de l'inférence : les poids, les activations, le KV-cache et les formats numériques.
+Poids et Activations : Un tenseur est un tableau multi-dimensionnel de nombres. Dans un LLM, les poids (les paramètres du modèle appris durant l'entraînement) sont stockés sur disque puis chargés en mémoire vive (VRAM du GPU) sous forme de tenseurs. Les activations désignent les résultats intermédiaires calculés à chaque étape de l'inférence.
+KV-Cache : La mémoire KV-cache correspond aux tenseurs de clés (Keys) et valeurs (Values) du mécanisme d'attention, conservés au fil de la génération de texte. Ce cache est crucial car il accélère l'auto-régression en évitant de recalculer tout l'historique à chaque nouveau token généré. Sa gestion est optimisée sur les serveurs modernes, notamment grâce à des techniques comme Paged Attention (qui partitionne le cache en pages) et l'in-flight batching (qui regroupe des requêtes en cours). La bibliothèque open-source vLLM, par exemple, utilise PagedAttention pour stocker les Keys/Values en blocs non contigus, réduisant le gaspillage de mémoire à moins de 4 % (contre 60 à 80 % dans les systèmes classiques).
+Répartition de la VRAM : En pratique, la VRAM requise à l’inférence se compose des poids du modèle, des activations temporaires, et du KV-cache. Les poids dominent souvent l'empreinte mémoire (environ 65 % de la VRAM sur un modèle 13B), le KV-cache occupant ~30 % (variable selon la longueur de séquence) et les activations une part minime. La taille sur disque est donc dictée par les poids, tandis que l'usage en VRAM dépend fortement du KV-cache pour les longs contextes.
+Overflow / Underflow : Un overflow survient quand une valeur dépasse la plage représentable par le format numérique choisi (elle devient infinie), tandis qu’un underflow se produit lorsque la valeur est trop petite pour être représentée (elle est arrondie à zéro). Les formats à faible dynamique, comme FP8 ou INT4/INT8, nécessitent des techniques de calibration pour éviter ces problèmes. La méthode SmoothQuant, par exemple, ajuste l'échelle des poids et des activations pour "lisser" les valeurs extrêmes (outliers) avant la quantization.
+Les formats numériques : de la haute précision à l'ultra-compression
+Le choix du format numérique est un compromis permanent entre précision, performance et consommation mémoire.
+FP32 (float 32 bits) : Le format de référence en entraînement. Il offre une haute précision et une large plage dynamique (~10^38), au prix d'un coût mémoire et calcul élevé.
+BF16 (bfloat16) : Format 16 bits avec la même plage dynamique que le FP32 mais une précision réduite. Très utilisé en entraînement en précision mixte sur TPU/GPU car il préserve bien l'échelle des gradients.
+FP16 (float16) : Format 16 bits standard en inférence GPU. Sa plage de valeurs est plus réduite que le BF16, mais il offre une meilleure précision. Les Tensor Cores des GPU Ampere/Hopper y sont dédiés.
+FP8 (float8) : Introduit avec l'architecture NVIDIA Hopper (H100), il existe en deux variantes : E4M3 (plus de précision, plage modérée) et E5M2 (moins de précision, plage plus large). Le H100 l'accélère nativement via sa Transformer Engine, permettant de diviser par deux l'empreinte mémoire par rapport au FP16 avec une qualité quasi-identique si le modèle est bien calibré.
+INT8 (entier 8 bits) : La quantization en entiers 8 bits (valeurs de -128 à 127) nécessite des échelles (scales) pour mapper la plage de valeurs réelles aux 256 niveaux disponibles. On distingue la quantization des poids seuls de la quantization W8A8 (poids et activations), qui permet d'accélérer l'ensemble du calcul grâce aux Tensor Cores INT8. La méthode SmoothQuant a démontré l'efficacité du W8A8 en déplaçant la difficulté de quantization des activations vers les poids.
+INT4 (entier 4 bits) : Une quantization ultra-agressive (16 niveaux) appliquée uniquement aux poids (weight-only). Elle est utilisée pour compresser massivement les modèles sur du matériel contraint (GPU grand public, CPU). Des techniques comme AWQ ou GPTQ parviennent à réduire la perte de qualité en utilisant des échelles par groupe de poids ou en protégeant les poids les plus importants. Le gain de vitesse n'est pas aussi élevé que le gain mémoire, car l'INT4 n'est pas accéléré nativement.
+Tableau récapitulatif des formats
+Format	Bits (total)	Exposant/Mantisse	Plage dynamique approx.	Utilisation typique et remarques
+FP32	32 bits	8 exp, 23 mant	~1e-38 à 1e+38	Haute précision (référence). Entraînement, calculs sensibles.
+BF16	16 bits	8 exp, 7 mant	~1e-38 à 1e+38	Entraînement mixte précision (TPU/GPU), inférence. Même dynamique que FP32 mais précision réduite.
+FP16	16 bits	5 exp, 10 mant	~1e-4 à 6.5e+4	Inférence sur GPU (Tensor Cores). Précision suffisante dans la plupart des cas.
+FP8 E4M3	8 bits	4 exp, 3 mant	~1e-2 à ~4.5e+2	Inférence GPU Hopper (H100). Utilisé pour poids/activations. Calibration impérative.
+FP8 E5M2	8 bits	5 exp, 2 mant	~1e-2 à ~5.7e+4	Utilisé pour les gradients (plus grande dynamique) ou le KV-cache FP8.
+INT8 (W8A8)	8 bits (entier)	256 valeurs (échelle)	Inférence quantifiée poids + activations. Requiert calibration (ex. SmoothQuant).	
+INT4 (poids)	4 bits (entier)	16 valeurs (par groupe)	Compression extrême des poids. Légère dégradation possible. Utilisé via AWQ, GPTQ.	
+Objectifs et stratégies de quantization par défaut
+La quantization n'est pas une fin en soi, mais un moyen d'atteindre des objectifs précis de déploiement. Voici trois stratégies par défaut et leurs cas d'usage.
+H100 FP8 de bout en bout (Qualité maximale, performance extrême)
+Objectif : Obtenir la latence la plus faible et le débit le plus élevé possible sur du matériel de dernière génération (NVIDIA H100), sans sacrifier la qualité du modèle.
+Description : Utilisation du format FP8 pour les poids, les activations et le KV-cache. Cette approche tire pleinement parti de l'architecture Hopper et de sa Transformer Engine. La perte de qualité est généralement négligeable (<1 %) par rapport au FP16, tandis que les performances sont multipliées.
+Quand ne pas l'utiliser : Si vous ne disposez pas de GPU compatibles (Hopper, Ada ou futurs), ou si des tests révèlent une instabilité numérique sur des couches très spécifiques de votre modèle (un cas rare).
+INT8 SmoothQuant (Le choix robuste et universel)
+Objectif : Réduire de moitié l'empreinte mémoire et accélérer les calculs sur une large gamme de matériel (GPU Ampere/Hopper, CPU), avec une garantie de stabilité et une perte de qualité minimale.
+Description : Quantization des poids et des activations en entiers 8 bits (W8A8) grâce à la méthode SmoothQuant, qui calibre les échelles pour éviter les erreurs. C'est une solution éprouvée, bien supportée par les frameworks.
+Quand ne pas l'utiliser : Sur H100, le FP8 est souvent légèrement plus performant. Si la moindre dégradation de la qualité est inacceptable pour des tâches de raisonnement très complexes (bien que la perte soit quasi nulle).
+INT4 AWQ + KV-Cache FP8 (Compression maximale, haute densité)
+Objectif : Maximiser le nombre de modèles ou de sessions simultanées sur une VRAM donnée, ou déployer des modèles très larges sur du matériel contraint.
+Description : Les poids du modèle sont compressés en 4 bits avec une méthode avancée comme AWQ (Activation-aware Weight Quantization) pour préserver la qualité. Les activations restent en FP16 et le KV-cache peut être stocké en FP8 pour économiser encore plus de mémoire.
+Quand ne pas l'utiliser : Pour des applications où la finesse stylistique, la cohérence sur de très longs textes ou le raisonnement complexe sont critiques. La perte de qualité, bien que modeste, est plus perceptible qu'en 8 bits.
+Tableau décisionnel : Quand choisir quoi ?
+Ce tableau vous aide à choisir la bonne stratégie en fonction de vos contraintes.
+Contrainte	FP8 (W8A8)	INT8 SmoothQuant (W8A8)	INT4 AWQ (poids)	GGUF (CPU/Edge)
+Latence minimale	✅ (H100)	✅ (GPU récents)	⚠️ (Gain mémoire > vitesse)	❌ (Lent)
+VRAM maximale	✅	✅	✅✅ (Optimal)	✅ (Très faible conso)
+Qualité max (proche FP16)	✅✅	✅	⚠️ (Légère dégradation)	⚠️ (Dépend du format)
+Portabilité (CPU/GPU)	❌ (H100+)	⚠️ (GPU/CPU avec support)	⚠️ (GPU/CPU avec support)	✅✅ (Universel)
+Flag vLLM	--quantization fp8	--quantization int8	--quantization awq	(Chargement direct du .gguf)
+Option TensorRT-LLM	--use_fp8	--quant_mode int8_sq	--quant_mode int4_awq	(Non applicable)
+La gestion du KV-cache : un enjeu majeur
+L'impact du format : FP16 vs FP8
+Par défaut, le KV-cache est souvent maintenu en FP16 pour une fidélité maximale, mais cela consomme beaucoup de VRAM. Passer le KV-cache en FP8 divise par deux cette empreinte, permettant d'augmenter la longueur de contexte ou le nombre de sessions simultanées. En pratique, l'impact sur la qualité est quasi nul avec un FP8 bien calibré sur H100.
+La formule du KV-Cache (avec GQA)
+La taille en octets du KV-cache peut être estimée avec la formule suivante :
+KV_bytes ≈ batch_size × sequence_length × num_layers × (2 × hidden_size) × bytes_per_dtype / gqa_factor
+gqa_factor : Ratio entre le nombre de têtes d'attention et le nombre de têtes de clés/valeurs (pour Grouped-Query Attention). Vaut 1 pour MHA, >1 pour GQA/MQA.
+bytes_per_dtype :
+Data Type	Bytes
+FP32	4
+FP16 / BF16	2
+FP8 / INT8	1
+Conclusion : Passer le KV-cache en FP8 permet de servir environ deux fois plus de sessions ou de gérer un contexte deux fois plus long à VRAM constante.
+L'optimisation structurelle : PagedAttention
+Indépendamment du format, des algorithmes comme PagedAttention (popularisé par vLLM) optimisent l'usage du KV-cache en le découpant en pages. Cela évite la fragmentation mémoire et permet de partager des pages entre requêtes, réduisant drastiquement le gaspillage. Combiner KV-cache FP8 et PagedAttention offre le meilleur des deux mondes : un cache compact et géré efficacement.
+Méthodes de quantization clés
+SmoothQuant (INT8 W8A8) : Lisse les outliers d'activation en transférant une partie de leur amplitude vers les poids via un simple rescaling. C'est une méthode de post-training (sans ré-entraînement) qui permet de quantifier des modèles jusqu'à 530 milliards de paramètres en 8 bits avec une perte de précision négligeable.
+AWQ (Activation-aware Weight Quantization, INT4) : Identifie et protège les ~1% de poids les plus critiques pour la performance (identifiés via l'analyse des activations) et quantifie agressivement les 99% restants en 4 bits. Cette méthode a reçu le prix du meilleur article à MLSys 2024.
+GPTQ (INT3/INT4) : Utilise des informations de second ordre (approximation Hessienne) pour minimiser l'erreur de quantization bloc par bloc. C'est une méthode one-shot rapide et efficace qui a été largement adoptée par la communauté open-source.
+LLM.int8() (bitsandbytes) : Une approche qui quantifie la majorité des opérations en INT8 tout en isolant les outliers dans une multiplication séparée en FP16. Elle réduit l'empreinte mémoire sans accélérer le calcul et est aujourd'hui souvent remplacée par des solutions W8A8 plus performantes sur H100.
+Piles logicielles : TRT-LLM vs vLLM vs llama.cpp/GGUF
+A) TensorRT-LLM (NVIDIA)
+Un runtime et compilateur optimisé par NVIDIA. Il prend un modèle et le compile en un moteur binaire ultra-performant, spécifique au GPU.
+Points forts : Support FP8 natif sur H100, INT8/INT4, in-flight batching, paged KV-cache, et multi-GPU. Offre les meilleures performances brutes (latence et débit).
+Limites : Spécifique à NVIDIA, moins flexible (la compilation est nécessaire), et peut avoir un délai de support pour les nouveaux modèles exotiques.
+B) vLLM (Open-Source)
+Un serveur d'inférence LLM développé par UC Berkeley, axé sur la performance et la flexibilité.
+Points forts : Intègre l'algorithme PagedAttention pour une gestion mémoire quasi-optimale. Supporte FP8, INT8, et le chargement de poids 4-bit (AWQ, GPTQ). API Python simple, batching dynamique et open-source (Apache 2.0).
+Limites : Légèrement moins performant que TRT-LLM en termes de latence brute sur une seule requête, mais souvent plus efficace en débit sous forte charge multi-utilisateurs grâce à PagedAttention.
+C) llama.cpp / GGUF (CPU & autres)
+Un écosystème C++ pour exécuter des LLM sur du matériel varié (CPU, Apple Silicon). GGUF est le format de fichier utilisé pour stocker les poids quantifiés.
+Points forts : Multiplateforme, facile à déployer, large communauté. Supporte de nombreux formats de quantization spécialisés (Q4_K_M, Q8_0, etc.). Idéal pour le prototypage local et le déploiement sur des machines sans GPU puissant.
+Limites : Non optimisé pour les Tensor Cores des GPU haut de gamme. Utiliser llama.cpp sur un H100 serait un énorme gaspillage de potentiel.
+Calibration et garde-fous pour FP8/INT8 : une checklist pratique
+Une quantization réussie n'est pas automatique. Voici une checklist pour assurer la robustesse.
+Jeu de calibration : Utilisez un jeu de données représentatif de votre cas d'usage en production (512 à 2048 prompts suffisent généralement). La qualité des données de calibration influe directement sur la performance du modèle quantifié.
+Exclusion de couches sensibles : Si vous observez une instabilité, excluez les couches d'embedding et la tête de prédiction du langage (lm_head) de la quantization. Ces couches sont souvent plus sensibles à la perte de précision.
+Recette de quantization :
+Scaling : Privilégiez un scaling per-tensor ou per-channel pour une granularité fine.
+FP8 : Appliquez une recette mixte. Utilisez E4M3 pour les couches nécessitant de la précision (comme les matrices de poids) et E5M2 pour celles nécessitant une plus grande dynamique (comme les gradients, ou parfois les activations avec de grands outliers).
+Contrôles de validité (Sanity Checks) :
+Mesurez le taux de saturation et le nombre d'overflows pendant la calibration. Des valeurs élevées indiquent un problème.
+Calculez la similarité cosinus entre les sorties du modèle FP16 et du modèle quantifié. Un score élevé (>0.99) est un bon indicateur.
+Stratégie de repli (Fallback) : En cas de doute, surtout pour des tâches de raisonnement complexe, conservez le KV-cache en FP16 (--kv-cache-dtype fp16). C'est un excellent compromis qui préserve la fidélité des attentions tout en bénéficiant de la quantization des poids/activations.
+Observabilité en production (SLOs)
+Déployer un modèle quantifié, c'est bien. Le surveiller, c'est mieux.
+Indicateurs clés à suivre :
+Latence : p99 du temps de génération du premier token.
+Débit : tokens/seconde.
+Utilisation VRAM : VRAM par requête, fragmentation du KV-cache.
+Erreurs : Taux d'erreurs Out-Of-Memory (OOM), taux d'abandon des requêtes.
+Dérive de la qualité : Perplexité calculée de manière hebdomadaire sur un jeu de données de contrôle.
+Alertes à configurer :
+Latence p99 > seuil défini.
+Utilisation VRAM > 95%.
+Taux OOM > 0.5% des requêtes.
+Gaspillage du KV-cache > 8%.
+Risques, cas limites et comment les gérer
+Saturation du FP8 E4M3 : Sur des couches à très grande dynamique, le format E4M3 peut saturer. La solution est de forcer localement l'utilisation du format E5M2 pour ces couches spécifiques.
+Long contexte et raisonnement complexe : Pour des tâches très sensibles qui s'étalent sur des dizaines de milliers de tokens, la légère perte de précision du KV-cache FP8 peut s'accumuler. Testez rigoureusement avec un KV-cache FP16 pour valider si la différence est significative pour votre cas d'usage.
+"Perte de style" en INT4 : La quantization agressive en 4 bits peut parfois rendre le style du modèle plus générique. On peut souvent compenser ce phénomène en ajustant légèrement les paramètres de génération : augmenter un peu repetition_penalty (ex: de 1.1 à 1.15) et temperature.
+Licences : la quantization ne change rien
+La quantization est une transformation technique, elle ne modifie en rien la licence d'un modèle.
+Modèle (Exemple)	Licence	Usage Commercial	Redistribution Poids Quantifiés	Stratégie de Partage Recommandée
+Llama 3 70B	Llama 3 Community License	✅	✅	Poids directs (GGUF, AWQ, etc.)
+Mistral Large	Mistral AI Research License (MRL)	❌	❌	Scripts de quantization/merge
+Luminum-123B (Merge)	Hérite de la plus restrictive (MRL, CC-BY-NC)	❌	❌	Scripts de merge + quantization
+Gemma 7B	Gemma Terms of Use	✅	✅	Poids directs
+Règle d'or : Un modèle issu d'un merge hérite des restrictions de toutes ses composantes. En cas de doute, partagez des scripts de reproduction (merge, fine-tuning, quantization) plutôt que les poids dérivés.
+Annexe : Commandes types (Cheat-Sheet)
+A) TensorRT-LLM (H100, FP8)
+Exporter le checkpoint HF
+code
+Bash
+python examples/llama/convert_checkpoint.py \
+  --model_dir /path/to/model_hf \
+  --output_dir /path/to/output_trtllm_ckpt \
+  --dtype float16 --tp_size 2
+Builder l'engine FP8
+code
+Bash
+trtllm-build \
+  --checkpoint_dir /path/to/output_trtllm_ckpt \
+  --output_dir /path/to/engine_fp8 \
+  --use_fp8 --use_fp8_kv_cache \
+  --max_batch_size 8 \
+  --max_input_len 8192 --max_output_len 1024 \
+  --tp_size 2
+Lancer le serveur
+code
+Bash
+trtllm-serve --engine_dir /path/to/engine_fp8 --port 8080
+B) vLLM (FP8 ou INT8)
+Lancer en FP8
+code
+Bash
+vllm serve ORG/MODEL-HF \
+  --quantization fp8 \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384
+Lancer en INT8 (SmoothQuant)
+code
+Bash
+vllm serve ORG/MODEL-HF \
+  --quantization int8 \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384
+C) Conversion GGUF (llama.cpp)
+Convertir HF en GGUF FP16
+code
+Bash
+python convert-hf-to-gguf.py ModelNameHF --outfile model.gguf
+Quantifier en 4 bits
+code
+Bash
+./quantize model.gguf model-q4_K_M.gguf q4_K_M
