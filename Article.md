@@ -1,4 +1,48 @@
 Guide pratique (2025) — Quantization LLM sur H100 et alternatives (TRT-LLM, vLLM, GGUF)
+Table des matières
+
+Les bases : tenseurs, poids, activations, KV-cache
+
+Formats numériques : FP32, BF16, FP16, FP8, INT8, INT4
+
+H100 et FP8 : ce qui change
+
+Le KV-cache : FP16 vs FP8
+
+Méthodes de quantization clés
+
+Piles logicielles : TRT-LLM vs vLLM vs llama.cpp--gguf
+
+“8-bit” sous vLLM : que choisir ?
+
+Recommandations concrètes (cas 2×H100)
+
+Pipelines type (déploiement)
+
+Pipeline A — TRT-LLM FP8
+
+Pipeline B — TRT-LLM INT8 (SmoothQuant)
+
+Pipeline C — vLLM FP8 / INT8
+
+Pipeline D — llama.cpp / GGUF (Q8_0 / Q4_K_*)
+
+FAQ rapides
+
+Cas particulier : modèles “merge” & licences
+
+Choisir sa quantization (arbre de décision)
+
+Commandes types (référence rapide)
+
+Points de contrôle (qualité)
+
+TL;DR
+
+Sources
+
+Recommandations rapides (pour toi)
+
 Les bases : tenseurs, poids, activations, KV-cache
 
 Un tenseur est un tableau multi-dimensionnel de nombres (scalaires, vecteurs, matrices, etc.).
@@ -51,7 +95,7 @@ BF16	16	8 / 7	~1e-38 → 1e+38 (≈ FP32)	Mixed-precision entraînement/inféren
 FP16	16	5 / 10	~1e-4 → 6.5e+4	Standard inférence GPU (Tensor Cores). Bon compromis.
 FP8 E4M3	8	4 / 3	~1e-2 → ~4.5e+2	Inférence H100. Faible précision, calibration impérative.
 FP8 E5M2	8	5 / 2	~1e-2 → ~5.7e+4 (+∞)	Plutôt pour grads/backward ou KV-cache plus large dynamique.
-INT8 (W8A8)	8	entier (256 niv.)	via échelles (tensor/canal)	Poids+activations 8-bit. SmoothQuant pour stabilité. Tensor Cores int8.
+INT8 (W8A8)	8	entier (256 niv.)	via échelles	Poids+activations 8-bit. SmoothQuant pour stabilité. Tensor Cores int8.
 INT4 (poids)	4	entier (16 niv.)	via échelles/groupes	Compression ×4 vs FP16. AWQ/GPTQ. Légère perte style/cohérence.
 H100 et FP8 : ce qui change
 
@@ -167,7 +211,9 @@ INT4 AWQ (+ KV FP8) : max densité (70B ≈ ~40 Go). Légère dégradation style
 Validation : calibrage + jeu de prompts réaliste, A/B blindé (FP16 vs quant), PPL, distinct-n ; ajuster repetition_penalty, temperature/top_p si besoin.
 
 Pipelines type (déploiement)
-Pipeline A — TRT-LLM FP8 (recommandé H100)
+Pipeline A — TRT-LLM FP8
+
+Recommandé sur H100
 
 Exporter HF → TRT-LLM checkpoint :
 
@@ -338,7 +384,7 @@ GGUF (llama.cpp) = prototypage/edge, pas pour perf H100.
 
 Licences : la quantization ne change pas la licence ; respecter NC/MRL ; publier scripts/deltas, pas les poids si restrictions.
 
-Sources (liens regroupés)
+Sources
 
 docs.nvidia.com
 
