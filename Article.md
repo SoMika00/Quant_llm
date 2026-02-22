@@ -149,7 +149,9 @@ trtllm-build \
 ```
 
 5. Serving :
+```bash
 trtllm-serve --engine_dir /path/to/engine_fp8 --port 8080
+```
 
 
 ## 8. Références et Bibliographie
